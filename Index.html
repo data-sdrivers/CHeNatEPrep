@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <!--
+    MOBILE FIX 1: Full viewport meta — prevents mobile browsers from
+    zooming out or clipping the layout. user-scalable=no stops
+    double-tap zoom that breaks fixed-position elements on iOS/Android.
+  -->
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
+  <!--
+    MOBILE FIX 2: These meta tags tell iOS Safari and Android Chrome
+    to treat the page as a standalone web app — removes the browser
+    chrome when added to home screen and prevents the grey tap flash.
+  -->
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+  <meta name="apple-mobile-web-app-title" content="CHeNatEPrep"/>
+  <meta name="theme-color" content="#0A6EBD"/>
+  <meta name="format-detection" content="telephone=no"/>
+  <!--
+    MOBILE FIX 3: X-UA-Compatible forces IE/Edge legacy rendering off
+    and enables the best available rendering engine.
+  -->
+  <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+  <title>CHeNatEPrep Platform</title>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div id="app">
+    <div id="splash" class="splash">
+      <div class="splash-inner">
+        <div class="splash-logo">
+          <svg width="64" height="64" viewBox="0 0 56 56" fill="none">
+            <rect width="56" height="56" rx="14" fill="#0A6EBD"/>
+            <path d="M14 28C14 20.268 20.268 14 28 14C35.732 14 42 20.268 42 28"
+              stroke="#4FC3F7" stroke-width="3" stroke-linecap="round"/>
+            <path d="M28 42C20.268 42 14 35.732 14 28"
+              stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="28" cy="28" r="5" fill="#4FC3F7"/>
+            <path d="M28 20V28L33 33" stroke="#fff" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="splash-appname">CHeNatEPrep</div>
+        <p class="splash-text">CBT Platform Loading…</p>
+        <div class="splash-bar"><div class="splash-fill"></div></div>
+      </div>
+    </div>
+    <div id="root" style="display:none"></div>
+  </div>
+  <?!= include('AppScript'); ?>
+  <?!= include('AppScript2'); ?>
+</body>
+</html>

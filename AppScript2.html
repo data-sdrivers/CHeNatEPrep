@@ -1,0 +1,649 @@
+<script>
+'use strict';
+// ============================================================
+//  CHeNatEPrep Platform — AppScript2.html
+//  Developed by DSD (Data Solution Drivers)
+//  Analytics page + Admin panel + Scientific calculator.
+//  All async/await replaced with .then()/.catch() chains
+//  for full GAS runtime compatibility.
+// ============================================================
+
+// ══════════════════════════════════════════════════════════════
+//  ANALYTICS
+// ══════════════════════════════════════════════════════════════
+
+function renderAnalytics() {
+  return renderShell('analytics',
+    '<div class="page-title">Performance Analytics</div>' +
+    '<div class="page-sub">Track your readiness and improvement across all papers.</div>' +
+    '<div id="analytics-content"><div class="spinner"></div></div>'
+  );
+}
+
+function loadAnalytics() {
+  api('getAnalytics', { email: State.user.email })
+    .then(function (r) {
+      if (!r || !r.ok) throw new Error(r ? r.error : 'No response');
+      var a  = r.analytics;
+      var el = document.getElementById('analytics-content');
+      if (!el) return;
+
+      if (!a || !a.totalAttempts) {
+        el.innerHTML =
+          '<div class="empty-state">' +
+            '<div class="empty-title">No Data Yet</div>' +
+            '<div class="empty-sub">Complete at least one exam to see your analytics.</div>' +
+            '<button class="btn btn-primary mt-16" onclick="navigate(\'dashboard\')">Take an Exam</button>' +
+          '</div>';
+        return;
+      }
+
+      var cadreCls = function (c) { return c==='JCHEW'?'badge-blue':c==='CHO'?'badge-cho':'badge-teal'; };
+
+      var paperCards = (a.papers || []).map(function (p) {
+        var trendHtml = p.trend !== 0
+          ? '<div style="font-size:12px;color:' + (p.trend>0?'var(--success)':'var(--danger)') + '">' +
+              (p.trend>0?'&#9650;':'&#9660;') + ' ' + Math.abs(p.trend) + '% trend</div>'
+          : '';
+
+        var chartBars = p.attempts.length >= 2 ? p.attempts.map(function (at, i) {
+          return '<div class="bar-item">' +
+            '<div class="bar-val">' + at.percent + '%</div>' +
+            '<div class="bar-fill" style="height:' + Math.round((at.percent/100)*140) + 'px;background:' + (at.percent>=50?'var(--teal)':'var(--danger)') + '"></div>' +
+            '<div class="bar-label">#' + (i+1) + '</div>' +
+          '</div>';
+        }).join('') : '';
+
+        var rows = p.attempts.map(function (at) {
+          return '<tr>' +
+            '<td>#' + at.attemptNumber + '</td>' +
+            '<td>' + at.score + '/' + at.total + '</td>' +
+            '<td><strong style="color:' + (at.percent>=50?'var(--success)':'var(--danger)') + '">' + at.percent + '%</strong></td>' +
+            '<td>' + fmtDate(at.date) + '</td>' +
+          '</tr>';
+        }).join('');
+
+        return '<div class="card mb-16">' +
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">' +
+            '<div>' +
+              '<div class="card-title" style="margin-bottom:4px">' + p.title + '</div>' +
+              '<span class="badge ' + cadreCls(p.cadre) + '">' + p.cadre + '</span>' +
+            '</div>' +
+            '<div style="text-align:right">' +
+              '<div style="font-size:12px;color:var(--muted)">Best / Average</div>' +
+              '<div style="font-size:20px;font-weight:800;color:var(--blue)">' + p.best + '% / ' + p.avg + '%</div>' +
+              trendHtml +
+            '</div>' +
+          '</div>' +
+          '<div class="progress-bar" style="height:10px"><div class="progress-fill" style="width:' + p.avg + '%"></div></div>' +
+          (chartBars ? '<div style="margin-top:12px"><div style="font-size:12px;color:var(--muted);margin-bottom:6px">Score Trend</div><div class="mini-bar">' + chartBars + '</div></div>' : '') +
+          '<div class="table-wrap mt-16"><table>' +
+            '<thead><tr><th>Attempt</th><th>Score</th><th>%</th><th>Date</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+          '</table></div>' +
+        '</div>';
+      }).join('');
+
+      el.innerHTML =
+        '<div class="stats-grid">' +
+          '<div class="stat-card"><div class="stat-value">' + a.totalAttempts + '</div><div class="stat-label">Attempts</div></div>' +
+          '<div class="stat-card teal"><div class="stat-value">' + a.avgPercent + '%</div><div class="stat-label">Average</div></div>' +
+          '<div class="stat-card success"><div class="stat-value">' + a.bestPercent + '%</div><div class="stat-label">Best</div></div>' +
+          '<div class="stat-card warn"><div class="stat-value">' + a.passRate + '%</div><div class="stat-label">Pass Rate</div></div>' +
+        '</div>' + paperCards;
+    })
+    .catch(function (e) {
+      var el = document.getElementById('analytics-content');
+      if (el) el.innerHTML = '<div class="alert alert-error">Failed: ' + e.message + '</div>';
+    });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ADMIN PANEL
+// ══════════════════════════════════════════════════════════════
+
+var _adm = { stats: {}, users: [], attempts: [], papers: [] };
+
+function renderAdmin() {
+  return renderShell('admin',
+    '<div class="page-title">Admin Dashboard</div>' +
+    '<div class="page-sub">Manage papers, questions, users and statistics.</div>' +
+    '<div class="tabs">' +
+      '<div class="tab active" onclick="adminTab(\'overview\',this)">Overview</div>' +
+      '<div class="tab" onclick="adminTab(\'papers\',this)">Papers</div>' +
+      '<div class="tab" onclick="adminTab(\'questions\',this)">Questions</div>' +
+      '<div class="tab" onclick="adminTab(\'users\',this)">Users</div>' +
+      '<div class="tab" onclick="adminTab(\'attempts\',this)">Attempts</div>' +
+    '</div>' +
+    '<div id="admin-panel"><div class="spinner"></div></div>'
+  );
+}
+
+function loadAdmin() {
+  Promise.all([
+    api('getAdminStats'),
+    api('getAllUsers'),
+    api('getAllAttempts'),
+    api('getPapers', {})
+  ]).then(function (res) {
+    _adm = {
+      stats:    (res[0] && res[0].stats)    || {},
+      users:    (res[1] && res[1].users)    || [],
+      attempts: (res[2] && res[2].attempts) || [],
+      papers:   (res[3] && res[3].papers)   || []
+    };
+    _adminTab('overview');
+  }).catch(function (e) {
+    var el = document.getElementById('admin-panel');
+    if (el) el.innerHTML = '<div class="alert alert-error">Failed: ' + e.message + '</div>';
+  });
+}
+
+function adminTab(tab, el) {
+  document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
+  el.classList.add('active');
+  _adminTab(tab);
+}
+
+function _adminTab(tab) {
+  var panel = document.getElementById('admin-panel');
+  if (!panel) return;
+  var map = {
+    overview:  _adminOverview,
+    papers:    _adminPapers,
+    questions: _adminQuestions,
+    users:     _adminUsers,
+    attempts:  _adminAttempts
+  };
+  if (map[tab]) panel.innerHTML = map[tab]();
+}
+
+function _cadreCls(c) { return c==='JCHEW'?'badge-blue':c==='CHO'?'badge-cho':'badge-teal'; }
+
+function _adminOverview() {
+  var s    = _adm.stats || {};
+  var rows = (s.paperStats || []).map(function (p) {
+    return '<tr>' +
+      '<td><strong>' + p.title + '</strong></td>' +
+      '<td><span class="badge ' + _cadreCls(p.cadre) + '">' + p.cadre + '</span></td>' +
+      '<td>' + (p.active ? '<span class="badge badge-teal">Active</span>' : '<span class="badge badge-admin">Inactive</span>') + '</td>' +
+      '<td>' + p.questions + '</td>' +
+      '<td>' + p.attempts + '</td>' +
+      '<td><strong style="color:' + (p.avgScore>=50?'var(--success)':'var(--danger)') + '">' + p.avgScore + '%</strong></td>' +
+    '</tr>';
+  }).join('');
+
+  return '<div class="stats-grid">' +
+    '<div class="stat-card"><div class="stat-value">' + (s.totalStudents||0) + '</div><div class="stat-label">Students</div></div>' +
+    '<div class="stat-card teal"><div class="stat-value">' + (s.jchewStudents||0) + '</div><div class="stat-label">JCHEW</div></div>' +
+    '<div class="stat-card warn"><div class="stat-value">' + (s.chewStudents||0) + '</div><div class="stat-label">CHEW</div></div>' +
+    '<div class="stat-card cho"><div class="stat-value">' + (s.choStudents||0) + '</div><div class="stat-label">CHO</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + (s.totalPapers||0) + '</div><div class="stat-label">Papers</div></div>' +
+    '<div class="stat-card success"><div class="stat-value">' + (s.totalQuestions||0) + '</div><div class="stat-label">Questions</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + (s.totalAttempts||0) + '</div><div class="stat-label">Attempts</div></div>' +
+  '</div>' +
+  '<div class="card"><div class="card-title">Paper Statistics</div>' +
+    '<div class="table-wrap"><table>' +
+      '<thead><tr><th>Paper</th><th>Cadre</th><th>Status</th><th>Questions</th><th>Attempts</th><th>Avg %</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table></div>' +
+  '</div>';
+}
+
+function _adminPapers() {
+  var rows = _adm.papers.map(function (p) {
+    var pid    = String(p.PaperID || p.paperID || '');
+    var title  = String(p.Title   || p.title   || '');
+    var cadre  = String(p.Cadre   || p.cadre   || '');
+    var active = p.Active !== false && String(p.Active).toUpperCase() !== 'FALSE';
+    return '<tr>' +
+      '<td><strong>' + title + '</strong></td>' +
+      '<td><span class="badge ' + _cadreCls(cadre) + '">' + cadre + '</span></td>' +
+      '<td>' + (p.questionCount||p.TotalQuestions||0) + '</td>' +
+      '<td>' + (p.Duration||60) + ' min</td>' +
+      '<td>' +
+        '<label class="toggle-switch" title="' + (active?'Deactivate':'Activate') + '">' +
+          '<input type="checkbox" ' + (active?'checked':'') + ' onchange="adminTogglePaper(\'' + pid + '\',this.checked)">' +
+          '<span class="toggle-slider"></span>' +
+        '</label>' +
+        '<span class="toggle-label ' + (active?'toggle-on':'toggle-off') + '" id="tl-' + pid + '">' + (active?'Active':'Inactive') + '</span>' +
+      '</td>' +
+      '<td><button class="btn btn-danger btn-sm" onclick="adminDelPaper(\'' + pid + '\',\'' + title.replace(/'/g,"\\'") + '\')">' + _ico('trash') + ' Delete</button></td>' +
+    '</tr>';
+  }).join('');
+
+  return '<div class="card mb-16"><div class="card-title">Add New Paper</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group"><label>Title</label><input type="text" id="np-title" placeholder="e.g. JCHEW Paper 1"/></div>' +
+      '<div class="form-group"><label>Cadre</label><select id="np-cadre"><option value="">--</option><option>JCHEW</option><option>CHEW</option><option>CHO</option></select></div>' +
+      '<div class="form-group"><label>Questions</label><input type="text" id="np-total" placeholder="100"/></div>' +
+      '<div class="form-group"><label>Duration (min)</label><input type="text" id="np-dur" placeholder="60"/></div>' +
+    '</div>' +
+    '<button class="btn btn-primary" onclick="adminAddPaper()">' + _ico('plus') + ' Add Paper</button>' +
+  '</div>' +
+  '<div class="card"><div class="card-title">All Papers (' + _adm.papers.length + ')</div>' +
+    '<div class="table-wrap"><table>' +
+      '<thead><tr><th>Title</th><th>Cadre</th><th>Questions</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table></div>' +
+  '</div>';
+}
+
+function _adminQuestions() {
+  var opts = _adm.papers.map(function (p) {
+    return '<option value="' + p.PaperID + '">' + p.Title + ' (' + p.Cadre + ')</option>';
+  }).join('');
+  return '<div class="card mb-16"><div class="card-title">Add Question</div>' +
+    '<div class="form-group"><label>Paper</label><select id="q-paper" onchange="adminLoadQs(this.value)"><option value="">-- Select --</option>' + opts + '</select></div>' +
+    '<div class="form-group"><label>Question Text</label><textarea id="q-text" placeholder="Type the question\u2026"></textarea></div>' +
+    '<div class="form-row">' +
+      '<div class="form-group"><label>Option A</label><input type="text" id="q-a"/></div>' +
+      '<div class="form-group"><label>Option B</label><input type="text" id="q-b"/></div>' +
+      '<div class="form-group"><label>Option C</label><input type="text" id="q-c"/></div>' +
+      '<div class="form-group"><label>Option D</label><input type="text" id="q-d"/></div>' +
+    '</div>' +
+    '<div class="form-group"><label>Correct Answer</label><select id="q-ans"><option>A</option><option>B</option><option>C</option><option>D</option></select></div>' +
+    '<div style="display:flex;gap:8px">' +
+      '<button class="btn btn-primary" onclick="adminAddQ()">' + _ico('plus') + ' Add</button>' +
+      '<button class="btn btn-outline" onclick="adminBulkImport()">&#128203; Bulk Import (JSON)</button>' +
+    '</div>' +
+  '</div>' +
+  '<div class="card"><div class="card-title">Questions List</div>' +
+    '<p class="text-muted text-sm mb-16">Select a paper above to view its questions.</p>' +
+    '<div id="q-list"></div>' +
+  '</div>';
+}
+
+function _adminUsers() {
+  var rows = _adm.users.map(function (u) {
+    return '<tr>' +
+      '<td><strong>' + (u.FullName||'') + '</strong></td>' +
+      '<td>' + (u.Email||'') + '</td>' +
+      '<td><span class="badge ' + _cadreCls(u.Cadre||'') + '">' + (u.Cadre||'') + '</span></td>' +
+      '<td><span class="badge ' + (u.Role==='admin'?'badge-admin':'') + '">' + (u.Role||'') + '</span></td>' +
+      '<td>' + fmtDate(u.CreatedAt) + '</td>' +
+      '<td>' + (u.Role!=='admin' ? '<button class="btn btn-outline btn-sm" onclick="adminResetPw(\'' + (u.Email||'').replace(/'/g,"\\'") + '\')">Reset PW</button>' : '') + '</td>' +
+    '</tr>';
+  }).join('');
+  return '<div class="card"><div class="card-title">Users (' + _adm.users.length + ')</div>' +
+    '<div class="table-wrap"><table>' +
+      '<thead><tr><th>Name</th><th>Email</th><th>Cadre</th><th>Role</th><th>Registered</th><th>Actions</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table></div>' +
+  '</div>';
+}
+
+function _adminAttempts() {
+  var submitted = (_adm.attempts || []).filter(function (a) { return a.Status === 'submitted'; });
+  var rows = submitted.slice(0, 200).map(function (a) {
+    var paper = _adm.papers.find(function (p) { return p.PaperID === a.PaperID; }) || {};
+    var total = parseInt(paper.TotalQuestions || 100, 10);
+    var pct   = total > 0 ? Math.round((Number(a.Score) / total) * 100) : 0;
+    return '<tr>' +
+      '<td>' + (a.Email||'') + '</td>' +
+      '<td>' + (paper.Title||a.PaperID||'') + '</td>' +
+      '<td><strong style="color:' + (pct>=50?'var(--success)':'var(--danger)') + '">' + (a.Score||0) + '/' + total + ' (' + pct + '%)</strong></td>' +
+      '<td>#' + (a.AttemptNumber||'') + '</td>' +
+      '<td>' + fmtDate(a.StartTime) + '</td>' +
+    '</tr>';
+  }).join('');
+  return '<div class="card"><div class="card-title">Submitted Attempts (' + submitted.length + ')</div>' +
+    '<div class="table-wrap"><table>' +
+      '<thead><tr><th>Student</th><th>Paper</th><th>Score</th><th>#</th><th>Date</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table></div>' +
+  '</div>';
+}
+
+// ── Admin actions ────────────────────────────────────────────
+
+function adminAddPaper() {
+  var title = _val('np-title'), cadre = _val('np-cadre');
+  var total = parseInt(_val('np-total')||'100',10), dur = parseInt(_val('np-dur')||'60',10);
+  if (!title || !cadre) return alert('Title and cadre are required.');
+  api('addPaper', { title:title, cadre:cadre, totalQuestions:total, duration:dur })
+    .then(function (r) { if (!r||!r.ok) return alert(r?r.error:'Error'); loadAdmin(); })
+    .catch(function (e) { alert(e.message); });
+}
+
+function adminTogglePaper(pid, active) {
+  api('togglePaper', { paperID:pid, active:active })
+    .then(function (r) {
+      if (!r||!r.ok) {
+        alert(r?r.error:'Error');
+        var cb = document.querySelector('input[onchange*="' + pid + '"]');
+        if (cb) cb.checked = !active;
+        return;
+      }
+      var lbl = document.getElementById('tl-' + pid);
+      if (lbl) { lbl.textContent = r.active?'Active':'Inactive'; lbl.className = 'toggle-label ' + (r.active?'toggle-on':'toggle-off'); }
+    })
+    .catch(function (e) { alert(e.message); });
+}
+
+function adminDelPaper(pid, title) {
+  if (!confirm('Delete "' + title + '" and ALL its questions? This cannot be undone.')) return;
+  api('deletePaper', { paperID:pid })
+    .then(function (r) { if (!r||!r.ok) return alert(r?r.error:'Error'); loadAdmin(); })
+    .catch(function (e) { alert(e.message); });
+}
+
+function adminAddQ() {
+  var pid = _val('q-paper'), text = _val('q-text');
+  var a = _val('q-a'), b = _val('q-b'), c = _val('q-c'), d = _val('q-d');
+  var ans = _val('q-ans');
+  if (!pid)  return alert('Select a paper first.');
+  if (!text) return alert('Question text is required.');
+  if (!a||!b) return alert('At least options A and B are required.');
+  api('addQuestion', { paperID:pid, questionText:text, optionA:a, optionB:b, optionC:c, optionD:d, correctAnswer:ans })
+    .then(function (r) {
+      if (!r||!r.ok) return alert(r?r.error:'Error');
+      ['q-text','q-a','q-b','q-c','q-d'].forEach(function (id) {
+        var el = document.getElementById(id); if (el) el.value = '';
+      });
+      adminLoadQs(pid);
+    })
+    .catch(function (e) { alert(e.message); });
+}
+
+function adminLoadQs(pid) {
+  var el = document.getElementById('q-list');
+  if (!el || !pid) return;
+  el.innerHTML = '<div class="spinner"></div>';
+  api('getQuestions', { paperID:pid })
+    .then(function (r) {
+      var qs = (r && r.questions) || [];
+      if (!qs.length) { el.innerHTML = '<p class="text-muted">No questions yet.</p>'; return; }
+      var rows = qs.map(function (q, i) {
+        return '<tr>' +
+          '<td>' + (i+1) + '</td>' +
+          '<td style="max-width:380px;word-break:break-word">' + (q.QuestionText||'') + '</td>' +
+          '<td><strong style="color:var(--success)">' + (q.CorrectAnswer||'') + '</strong></td>' +
+          '<td><button class="btn btn-danger btn-sm" onclick="adminDelQ(\'' + q.QuestionID + '\',\'' + pid + '\')">' + _ico('trash') + '</button></td>' +
+        '</tr>';
+      }).join('');
+      el.innerHTML = '<p class="text-muted mb-16">' + qs.length + ' question(s)</p>' +
+        '<div class="table-wrap"><table>' +
+          '<thead><tr><th>#</th><th>Question</th><th>Answer</th><th></th></tr></thead>' +
+          '<tbody>' + rows + '</tbody>' +
+        '</table></div>';
+    })
+    .catch(function (e) { el.innerHTML = '<div class="alert alert-error">' + e.message + '</div>'; });
+}
+
+function adminDelQ(qid, pid) {
+  if (!confirm('Delete this question?')) return;
+  api('deleteQuestion', { questionID:qid })
+    .then(function (r) { if (!r||!r.ok) return alert(r?r.error:'Error'); adminLoadQs(pid); })
+    .catch(function (e) { alert(e.message); });
+}
+
+function adminBulkImport() {
+  var opts = _adm.papers.map(function (p) {
+    return '<option value="' + p.PaperID + '">' + p.Title + '</option>';
+  }).join('');
+  showModal('Bulk Import (JSON)',
+    '<div class="form-group"><label>Paper</label>' +
+      '<select id="imp-paper"><option value="">-- Select --</option>' + opts + '</select>' +
+    '</div>' +
+    '<div class="form-group"><label>JSON Array</label>' +
+      '<textarea id="imp-json" style="min-height:180px;font-family:monospace;font-size:12px" ' +
+        'placeholder=\'[{"questionText":"...","optionA":"...","optionB":"...","optionC":"...","optionD":"...","correctAnswer":"A"}]\'></textarea>' +
+      '<div class="input-hint">correctAnswer must be A, B, C or D.</div>' +
+    '</div>' +
+    '<button class="btn btn-primary" onclick="adminDoBulk()">' + _ico('plus') + ' Import</button>'
+  );
+}
+
+function adminDoBulk() {
+  var pid = _val('imp-paper'), raw = _val('imp-json');
+  if (!pid) return alert('Select a paper.');
+  if (!raw) return alert('Paste JSON data.');
+  var qs;
+  try { qs = JSON.parse(raw); } catch(e) { return alert('Invalid JSON.'); }
+  if (!Array.isArray(qs)||!qs.length) return alert('JSON must be a non-empty array.');
+  api('importQuestions', { paperID:pid, questions:qs })
+    .then(function (r) {
+      if (!r||!r.ok) return alert(r?r.error:'Error');
+      var errs = r.errors && r.errors.length ? '\nErrors:\n' + r.errors.join('\n') : '';
+      alert('&#10003; Imported ' + r.inserted + ' question(s).' + errs);
+      closeModal();
+      loadAdmin();
+    })
+    .catch(function (e) { alert(e.message); });
+}
+
+function adminResetPw(email) {
+  if (!confirm('Reset password for ' + email + '?')) return;
+  api('resetPassword', { email:email })
+    .then(function (r) {
+      if (!r||!r.ok) return alert(r?r.error:'Error');
+      showModal('Password Reset',
+        '<div class="alert alert-success mb-12">Password reset successful.</div>' +
+        '<p class="mb-8">Temporary password for <strong>' + email + '</strong>:</p>' +
+        '<div style="font-size:22px;font-weight:800;font-family:monospace;letter-spacing:4px;text-align:center;padding:16px;background:var(--bg);border-radius:8px;margin-bottom:12px">' + r.tempPassword + '</div>' +
+        '<p style="font-size:13px;color:var(--muted)">Share this securely. The candidate should change it after first login.</p>'
+      );
+    })
+    .catch(function (e) { alert(e.message); });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SCIENTIFIC CALCULATOR
+//  Keyboard is active only when no input/textarea/select is focused.
+// ══════════════════════════════════════════════════════════════
+
+var _cs = { cur:'0', prev:'', op:null, fresh:true, expr:'', mem:0, deg:true, inv:false, hyp:false };
+var _calcVisible = false;
+
+function calcInit() {
+  if (document.getElementById('chn-calc')) return;
+  var el = document.createElement('div');
+  el.id = 'chn-calc'; el.className = 'calc-wrap';
+  el.innerHTML =
+    '<div id="calc-bar" class="calc-titlebar" onmousedown="calcDrag(event)" ontouchstart="calcDrag(event)">' +
+      '<span class="calc-title">&#127298; Scientific Calculator</span>' +
+      '<div class="calc-titlebar-btns">' +
+        '<button class="calc-tb-btn" onclick="calcMin()">&#8722;</button>' +
+        '<button class="calc-tb-btn calc-close-btn" onclick="calcToggle()">&#10005;</button>' +
+      '</div>' +
+    '</div>' +
+    '<div id="calc-body">' +
+      '<div class="calc-display-wrap">' +
+        '<div class="calc-mode-row"><span id="cdeg" class="calc-mode-badge active">DEG</span><span id="cmem" class="calc-mode-badge" style="display:none">M</span></div>' +
+        '<div id="cexpr" class="calc-expr"></div>' +
+        '<div id="cscreen" class="calc-screen">0</div>' +
+      '</div>' +
+      '<div class="calc-grid5">' +
+        _cb('calcDeg()',       'bdeg', 'DEG')  + _cb('calcInv()', 'binv', 'INV') + _cb('calcHyp()', 'bhyp', 'HYP') +
+        _cb("calcMem('mc')")  + 'MC</button>' +
+        _cb("calcMem('mr')")  + 'MR</button>' +
+      '</div>' +
+      '<div class="calc-grid5">' +
+        _cb("calcTrig('sin')", 'bsin', 'sin') + _cb("calcTrig('cos')", 'bcos', 'cos') + _cb("calcTrig('tan')", 'btan', 'tan') +
+        _cb("calcS('log')") + 'log</button>' + _cb("calcS('ln')") + 'ln</button>' +
+      '</div>' +
+      '<div class="calc-grid5">' +
+        _cb("calcS('sq')") + 'x&#178;</button>' + _cb("calcS('cube')") + 'x&#179;</button>' + _cb("calcS('pow')") + 'x&#696;</button>' +
+        _cb("calcS('sqrt')") + '&#8730;x</button>' + _cb("calcS('cbrt')") + '&#8731;x</button>' +
+      '</div>' +
+      '<div class="calc-grid5">' +
+        _cb("calcConst('pi')") + '&#960;</button>' + _cb("calcConst('e')") + 'e</button>' +
+        _cb("calcS('inv')") + '1/x</button>' + _cb("calcS('abs')") + '|x|</button>' + _cb("calcMem('ms')") + 'MS</button>' +
+      '</div>' +
+      '<div class="calc-grid">' +
+        '<button class="calc-btn calc-fn" onclick="calcF(\'ac\')">AC</button>' +
+        '<button class="calc-btn calc-fn" onclick="calcF(\'sign\')">+/&#8722;</button>' +
+        '<button class="calc-btn calc-fn" onclick="calcF(\'pct\')">%</button>' +
+        '<button class="calc-btn calc-op" onclick="calcOp(\'/\')">&#247;</button>' +
+        _cd('7') + _cd('8') + _cd('9') +
+        '<button class="calc-btn calc-op" onclick="calcOp(\'*\')">&#215;</button>' +
+        _cd('4') + _cd('5') + _cd('6') +
+        '<button class="calc-btn calc-op" onclick="calcOp(\'-\')">&#8722;</button>' +
+        _cd('1') + _cd('2') + _cd('3') +
+        '<button class="calc-btn calc-op" onclick="calcOp(\'+\')">+</button>' +
+        '<button class="calc-btn calc-zero" onclick="calcD(\'0\')">0</button>' +
+        '<button class="calc-btn" onclick="calcD(\'.\')">.</button>' +
+        '<button class="calc-btn calc-eq" onclick="calcEq()">=</button>' +
+      '</div>' +
+      '<div class="calc-grid" style="grid-template-columns:1fr 1fr">' +
+        '<button class="calc-btn calc-sci2" onclick="calcS(\'exp\')">10&#739;</button>' +
+        '<button class="calc-btn calc-fn" onclick="calcF(\'del\')">&#9003; DEL</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(el);
+
+  document.addEventListener('keydown', function (e) {
+    var tag = document.activeElement ? document.activeElement.tagName : '';
+    var typ = document.activeElement ? (document.activeElement.type||'').toLowerCase() : '';
+    if (tag==='TEXTAREA'||tag==='SELECT') return;
+    if (tag==='INPUT'&&(typ==='text'||typ==='email'||typ==='password'||typ==='search'||typ==='number')) return;
+    if (!_calcVisible) return;
+    var k = e.key;
+    if (k>='0'&&k<='9'){ calcD(k); e.preventDefault(); }
+    else if(k==='.'){    calcD('.'); e.preventDefault(); }
+    else if(k==='+'){    calcOp('+'); e.preventDefault(); }
+    else if(k==='-'){    calcOp('-'); e.preventDefault(); }
+    else if(k==='*'){    calcOp('*'); e.preventDefault(); }
+    else if(k==='/'){    calcOp('/'); e.preventDefault(); }
+    else if(k==='Enter'||k==='='){ calcEq(); e.preventDefault(); }
+    else if(k==='Escape'){  calcF('ac'); }
+    else if(k==='Backspace'){ calcF('del'); e.preventDefault(); }
+  });
+}
+
+// Build calc button shorthand helpers
+function _cb(fn, id, label) {
+  return '<button class="calc-btn calc-sci2"' + (id?' id="'+id+'"':'') + ' onclick="' + fn + '">' + (label||'');
+}
+function _cd(d) { return '<button class="calc-btn" onclick="calcD(\'' + d + '\')">' + d + '</button>'; }
+
+function calcEnsureVisible() { if (!document.getElementById('chn-calc')) calcInit(); }
+
+function calcToggle() {
+  var el = document.getElementById('chn-calc');
+  if (!el) { calcInit(); el = document.getElementById('chn-calc'); }
+  _calcVisible = !_calcVisible;
+  el.style.display = _calcVisible ? 'flex' : 'none';
+  if (_calcVisible) {
+    var b = document.getElementById('calc-body'); if (b) b.style.display = '';
+    if (window.innerWidth <= 768) {
+      el.style.width = (window.innerWidth-24) + 'px';
+      el.style.cssText += ';bottom:70px;right:12px;left:auto;top:auto';
+    }
+  }
+}
+function calcMin() { var b = document.getElementById('calc-body'); if (b) b.style.display = b.style.display==='none'?'':'none'; }
+
+function _cDraw() {
+  var s = document.getElementById('cscreen'), e = document.getElementById('cexpr');
+  if (s) { s.textContent = _cs.cur; s.style.fontSize = _cs.cur.length>12?'16px':''; }
+  if (e) e.textContent = _cs.expr;
+  var d = document.getElementById('cdeg'); if (d) d.textContent = _cs.deg?'DEG':'RAD';
+  var bi = document.getElementById('binv'); if (bi) bi.classList[_cs.inv?'add':'remove']('calc-sci2-active');
+  var bh = document.getElementById('bhyp'); if (bh) bh.classList[_cs.hyp?'add':'remove']('calc-sci2-active');
+  var lbls = _cs.inv&&_cs.hyp ? {sin:'asinh',cos:'acosh',tan:'atanh'}
+           : _cs.inv           ? {sin:'sin\u207B\u00B9',cos:'cos\u207B\u00B9',tan:'tan\u207B\u00B9'}
+           : _cs.hyp           ? {sin:'sinh',cos:'cosh',tan:'tanh'}
+           :                     {sin:'sin', cos:'cos', tan:'tan'};
+  ['sin','cos','tan'].forEach(function(f){ var b=document.getElementById('b'+f); if(b) b.textContent=lbls[f]; });
+}
+function _cfmt(n){
+  if(!isFinite(n))return'Error';
+  var s=parseFloat(n.toFixed(10)).toString();
+  return s.length>16?parseFloat(n.toPrecision(10)).toString():s;
+}
+function calcD(d){
+  if(d==='.'&&_cs.cur.includes('.'))return;
+  if(_cs.fresh){_cs.cur=d==='.'?'0.':(d==='0'?'0':d);_cs.fresh=false;}
+  else{_cs.cur=(_cs.cur==='0'&&d!=='.')?d:_cs.cur+d;}
+  if(_cs.cur.length>16)_cs.cur=_cs.cur.slice(0,16);
+  _cDraw();
+}
+function calcOp(op){
+  var sym={'+':'+','-':'\u2212','*':'\u00D7','/':'\u00F7'}[op]||op;
+  if(_cs.op&&!_cs.fresh) calcEq();
+  _cs.prev=_cs.cur;_cs.op=op;_cs.fresh=true;_cs.expr=_cs.prev+' '+sym;_cDraw();
+}
+function calcEq(){
+  if(!_cs.op||_cs.fresh)return;
+  var a=parseFloat(_cs.prev),b=parseFloat(_cs.cur),r;
+  if(_cs.op==='+')r=a+b; else if(_cs.op==='-')r=a-b;
+  else if(_cs.op==='*')r=a*b; else if(_cs.op==='/')r=b===0?null:a/b; else r=b;
+  _cs.expr=_cs.prev+' '+_cs.op+' '+_cs.cur+' =';
+  _cs.cur=r===null?'Error':_cfmt(r);_cs.op=null;_cs.prev='';_cs.fresh=true;_cDraw();
+}
+function calcF(fn){
+  var n=parseFloat(_cs.cur);
+  if(fn==='ac'){Object.assign(_cs,{cur:'0',prev:'',op:null,fresh:true,expr:'',inv:false,hyp:false});}
+  else if(fn==='sign'&&!isNaN(n)){_cs.cur=_cfmt(-n);_cs.fresh=false;}
+  else if(fn==='pct'&&!isNaN(n)){_cs.cur=_cfmt(n/100);_cs.fresh=false;}
+  else if(fn==='del'){_cs.cur=_cs.cur.length>1?_cs.cur.slice(0,-1):'0';_cs.fresh=false;}
+  _cDraw();
+}
+function calcS(fn){
+  var n=parseFloat(_cs.cur),r;
+  if(isNaN(n))return;
+  var ops={sq:n*n,cube:n*n*n,sqrt:n<0?null:Math.sqrt(n),cbrt:Math.cbrt(n),inv:n===0?null:1/n,abs:Math.abs(n),log:n<=0?null:Math.log10(n),ln:n<=0?null:Math.log(n),exp:Math.pow(10,n)};
+  r=ops[fn]!==undefined?ops[fn]:n;
+  _cs.expr=fn+'('+_cs.cur+')=';_cs.cur=r===null?'Error':_cfmt(r);_cs.fresh=true;_cDraw();
+}
+function calcTrig(fn){
+  var n=parseFloat(_cs.cur),r;
+  if(isNaN(n))return;
+  var rad=_cs.deg?n*Math.PI/180:n;
+  if(_cs.inv&&_cs.hyp){
+    r={sin:Math.asinh(n),cos:Math.acosh(n),tan:Math.atanh(n)}[fn];
+  } else if(_cs.inv){
+    r={sin:Math.asin(n),cos:Math.acos(n),tan:Math.atan(n)}[fn];
+    if(_cs.deg&&r!==undefined)r=r*180/Math.PI;
+  } else if(_cs.hyp){
+    r={sin:Math.sinh(n),cos:Math.cosh(n),tan:Math.tanh(n)}[fn];
+  } else {
+    r={sin:Math.sin(rad),cos:Math.cos(rad),tan:Math.tan(rad)}[fn];
+  }
+  if(r===undefined||!isFinite(r))r=null;
+  _cs.cur=r===null?'Error':_cfmt(r);_cs.fresh=true;_cs.inv=false;_cs.hyp=false;_cDraw();
+}
+function calcConst(c){_cs.cur=c==='pi'?String(Math.PI):String(Math.E);_cs.fresh=false;_cDraw();}
+function calcMem(fn){
+  var n=parseFloat(_cs.cur);
+  if(fn==='mc'){_cs.mem=0;var m=document.getElementById('cmem');if(m)m.style.display='none';}
+  else if(fn==='mr'){_cs.cur=_cfmt(_cs.mem);_cs.fresh=true;}
+  else if(fn==='ms'&&!isNaN(n)){_cs.mem=n;var m=document.getElementById('cmem');if(m)m.style.display='';}
+  _cDraw();
+}
+function calcDeg(){_cs.deg=!_cs.deg;_cDraw();}
+function calcInv(){_cs.inv=!_cs.inv;_cDraw();}
+function calcHyp(){_cs.hyp=!_cs.hyp;_cDraw();}
+
+// Drag
+var _drag={on:false,sx:0,sy:0,ox:0,oy:0};
+function calcDrag(e){
+  if(e.target.tagName==='BUTTON')return;
+  _drag.on=true;var pt=e.touches?e.touches[0]:e;
+  _drag.sx=pt.clientX;_drag.sy=pt.clientY;
+  var r=document.getElementById('chn-calc').getBoundingClientRect();
+  _drag.ox=r.left;_drag.oy=r.top;
+  document.addEventListener('mousemove',_cdm);document.addEventListener('mouseup',_cde);
+  document.addEventListener('touchmove',_cdm,{passive:false});document.addEventListener('touchend',_cde);
+}
+function _cdm(e){
+  if(!_drag.on)return;if(e.cancelable)e.preventDefault();
+  var pt=e.touches?e.touches[0]:e;
+  var el=document.getElementById('chn-calc');
+  el.style.left=Math.max(0,Math.min(window.innerWidth-el.offsetWidth,_drag.ox+pt.clientX-_drag.sx))+'px';
+  el.style.top =Math.max(0,Math.min(window.innerHeight-el.offsetHeight,_drag.oy+pt.clientY-_drag.sy))+'px';
+  el.style.right='auto';el.style.bottom='auto';
+}
+function _cde(){
+  _drag.on=false;
+  document.removeEventListener('mousemove',_cdm);document.removeEventListener('mouseup',_cde);
+  document.removeEventListener('touchmove',_cdm);document.removeEventListener('touchend',_cde);
+}
+window.addEventListener('resize',function(){
+  var el=document.getElementById('chn-calc');if(!el||!_calcVisible)return;
+  if(window.innerWidth<=768){el.style.width=(window.innerWidth-24)+'px';el.style.bottom='70px';el.style.right='12px';el.style.left='auto';el.style.top='auto';}
+  else{el.style.width='320px';}
+});
+</script>
